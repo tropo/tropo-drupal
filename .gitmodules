@@ -1,0 +1,3 @@
+[submodule "lib/tropo"]
+	path = lib/tropo
+	url = git://github.com/tropo/tropo-webapi-php.git
