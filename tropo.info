@@ -1,0 +1,4 @@
+name = Tropo
+description = Phone calls, phone numbers, and SMS with the Tropo API
+package = Tropo
+core = 6.x
