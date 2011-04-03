@@ -318,7 +318,7 @@ function tropo_create_form_validate($form, &$form_state) {
 
 function tropo_create_form_submit($form, &$form_state) {
   
-  createApplication($href, $name, $voiceUrl, $messagingUrl, $platform, $partition)
+  createApplication($href, $name, $voiceUrl, $messagingUrl, $platform, $partition);
   $completed = FALSE;
   drupal_set_message('Created your application.');
   $prefixes = array();
