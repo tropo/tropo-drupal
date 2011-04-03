@@ -3,25 +3,30 @@ function tropo_menu() {
   $items = array();
 
   $items['admin/settings/tropo'] = array(
-    'title' => 'Phone Poll',
-    'description' => 'Phone enable your polls',
+    'title' => 'Tropo',
+    'description' => 'Configure site-wide settings and defaults for Tropo',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('tropo_settings'),
     'access arguments' => array('access administration pages'),
     'type' => MENU_NORMAL_ITEM,
   );
 
-  $items['admin/settings/tropo'] = array(
-    'title' => 'Phone Poll',
-    'description' => 'Phone enable your polls',
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('tropo_settings'),
-    'access arguments' => array('access administration pages'),
-    'type' => MENU_NORMAL_ITEM,
+  $items['tropo/countries'] = array(
+    'page callback' => 'tropo_countries',
+    'access arguments' => array('access content'),
+    'page arguments' => array(2),
+    'type' => MENU_CALLBACK,
   );
 
   $items['tropo/exchanges'] = array(
     'page callback' => 'tropo_exchanges',
+    'access arguments' => array('access content'),
+    'page arguments' => array(2),
+    'type' => MENU_CALLBACK,
+  );
+  
+  $items['tropo/create'] = array(
+    'page callback' => 'tropo_create',
     'access arguments' => array('access content'),
     'page arguments' => array(2),
     'type' => MENU_CALLBACK,
@@ -32,10 +37,24 @@ function tropo_menu() {
 
 function tropo_theme() {
   return array(
-    'tropo_exchanges' => array(
+    'tropo_form_exchanges' => array(
+      'arguments' => array('exchanges' => NULL),
+    ),
+    'tropo_form_countries' => array(
       'arguments' => array('exchanges' => NULL),
     ),
   );
+}
+
+/**
+ * Get a themed list of available exchanges from Tropo
+*/
+function tropo_countries() {
+  // TODO: make this configurable per-user
+  $user = variable_get('tropo_user', "");
+  $pass = variable_get('tropo_pass', "");
+  $exchanges = tropo_get_exchanges($user,$pass);
+  return theme('tropo_form_countries', $exchanges);
 }
 
 /**
@@ -46,7 +65,34 @@ function tropo_exchanges() {
   $user = variable_get('tropo_user', "");
   $pass = variable_get('tropo_pass', "");
   $exchanges = tropo_get_exchanges($user,$pass);
-  return theme('tropo_exchanges', $exchanges);
+  return theme('tropo_form_exchanges', $exchanges);
+}
+
+/*
+ * Use hook_form_alter to set a redirect location to the URL
+ * of the next form. Use this example to set up redirects in 
+ * your own modules.
+ */
+function tropo_form_alter(&$form, $form_state, $form_id) {
+  switch ($form_id){
+    case 'tropo_exchanges_form':
+      $form['#next'] = 'tropo/create';
+      break;
+    case 'tropo_countries_form':
+      $form['#next'] = 'tropo/exchanges';
+      break;
+  }
+}
+
+function tropo_api_call($function, $args = array(), $user,$pass) {
+  include_once 'lib/tropo/tropo-rest.class.php';
+  try {
+    $tropoProv = new ProvisioningAPI($user,$pass);
+    $resp = json_decode(call_user_func_array(array($tropoProv, $function), $args));
+  } catch (Exception $e) {
+    drupal_set_message($e->getMessage());
+    return;
+  }
 }
 
 /**
@@ -56,11 +102,11 @@ function tropo_get_exchanges($user,$pass) {
   include_once 'lib/tropo/tropo-rest.class.php';
   try {
     $tropoProv = new ProvisioningAPI($user,$pass);    
+    $resp = json_decode($tropoProv->viewExchanges());
   } catch (Exception $e) {
     drupal_set_message($e->getMessage());
     return;
   }
-  $resp = json_decode($tropoProv->viewExchanges());
   $exchanges = array();
   foreach ($resp as $exchange) {
     $arrDetails = array(
@@ -78,16 +124,70 @@ function tropo_get_exchanges($user,$pass) {
   return $exchanges;
 }
 
-function theme_tropo_exchanges($exchanges) {
-  $form = tropo_exchanges_form($exchanges);
-  $out .= drupal_render($form);
+function theme_tropo_form_countries($exchanges) {
+  $out .= drupal_get_form('tropo_countries_form', $exchanges);
   return $out;
 }
 
-function tropo_exchanges_form($exchanges) {
-  print_r($exchanges);
-
+function tropo_countries_form(&$form_state, $exchanges) {
   foreach ($exchanges as $country => $exchange) {    
+    $options = array('0' => 'Select...');
+    foreach($exchange['states'] as $details) {
+      $options[$details['country']] = "$country ({$details['prefix']})";
+    }
+    $form['international']['tropo_exchanges_region'] = array(
+      '#type' => 'select',
+      '#title' => t('Country'),
+      '#options' => $options
+    );
+  }
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Save'));
+  return $form;
+}
+
+
+function tropo_countries_form_validate($form, &$form_state) {
+  $completed = FALSE;
+  $values = $form_state['clicked_button']['#post'];
+  foreach ($values as $name => $item) {
+    if (is_array($item) && array_key_exists('tropo_exchanges_region', $item)) {
+      $completed = TRUE;
+    }
+  }
+  if (!$completed) {
+    form_set_error('', t('Please choose a country.'));
+  }
+}
+
+function tropo_countries_form_submit($form, &$form_state) {
+  $completed = FALSE;
+  $values = $form_state['clicked_button']['#post'];
+  //drupal_set_message(print_r($form_state,true));
+  $prefixes = array();
+  foreach ($values as $name => $item) {
+    if (is_array($item) && array_key_exists('tropo_exchanges_region', $item)) {
+      if ($item['tropo_exchanges_region'] > 0) {
+        $_SESSION['tropo_country'] = $item['tropo_exchanges_region'];
+      }
+    }
+  }
+  if (!empty($form['#next'])) {
+    drupal_goto($form['#next']);    
+  }
+}
+
+
+function theme_tropo_form_exchanges($exchanges) {
+  $out .= drupal_get_form('tropo_exchanges_form', $exchanges);
+  return $out;
+}
+
+function tropo_exchanges_form(&$form_state, $exchanges, $filter_country = null) {
+  foreach ($exchanges as $country => $exchange) {
+    if (!empty($filter_country) && $country != $filter_country) {
+      // We're only showing one country, and this isn't it.
+      continue;
+    }
     if (count($exchange['prefixes']) > 1) {
       // There's more than one location available in this country. Group by country
       $form[$country] = array(
@@ -95,26 +195,13 @@ function tropo_exchanges_form($exchanges) {
         '#title' => t($country . ' numbers'),
         '#collapsible' => TRUE,
         '#collapsed' => FALSE,
-        '#weight' => 8,
+        '#weight' => -10,
+        '#tree' => TRUE,
       );
-      $options = array();
-      foreach($exchange['prefixes'] as $details) {
-        $options[$details['prefix']] = "{$details['prefix']}: {$details['city']} {$details['state']}";
-      }
-      $form[$country]['tropo_exchanges_prefix'] = array(
-        '#type' => 'select',
-        '#title' => t('By prefix'),
-        '#options' => $options
-      );    
-      $options = array();
-      foreach($exchange['states'] as $details) {
-        $options[$details['prefix']] = "{$details['state']}: {$details['city']} ({$details['prefix']})";
-      }
-      $form[$country]['tropo_exchanges_region'] = array(
-        '#type' => 'select',
-        '#title' => t('By region'),
-        '#options' => $options
-      );    
+      $prefix_title = t('By prefix');
+      $region_title = t('By region');
+      // Blank country out because we're already displaying the name in the fieldset
+      $country = '';
     } else {
       if (!array_key_exists('international', $form)) {
         // Fieldset to group international numbers in
@@ -123,33 +210,135 @@ function tropo_exchanges_form($exchanges) {
           '#title' => t('International numbers'),
           '#collapsible' => TRUE,
           '#collapsed' => FALSE,
-          '#weight' => 9,
+          '#weight' => -9,
+          '#tree' => TRUE,
         );
       }
-      $options = array();
-      foreach($exchange['prefixes'] as $details) {
-        $options[$details['prefix']] = "{$details['prefix']}: $country";
-      }
-      $form['international']['tropo_exchanges_prefix'] = array(
-        '#type' => 'select',
-        '#title' => t('By country code'),
-        '#options' => $options
-      );    
-      $options = array();
-      foreach($exchange['states'] as $details) {
-        $options[$details['prefix']] = "$country: {$details['prefix']}";
-      }
-      $form['international']['tropo_exchanges_region'] = array(
-        '#type' => 'select',
-        '#title' => t('By country name'),
-        '#options' => $options
-      );
+      $prefix_title = t('By country code');
+      $region_title = t('By country name');      
     }
+    $options = array('0' => 'Select...');
+    foreach($exchange['prefixes'] as $details) {
+      $options[$details['prefix']] = "{$details['prefix']}: $country {$details['city']} {$details['state']}";
+      if ($details['description'] == 'Toll Free Phone Number') {
+        $options[$details['prefix']] = "{$details['prefix']} Toll Free";
+      }
+    }
+    $form['international']['tropo_exchanges_prefix'] = array(
+      '#type' => 'select',
+      '#title' => $prefix_title,
+      '#options' => $options
+    );    
+    $options = array('0' => 'Select...');
+    foreach($exchange['states'] as $details) {
+      $options[$details['prefix']] = "$country{$details['state']}: {$details['city']} ({$details['prefix']})";
+      if ($details['description'] == 'Toll Free Phone Number') {
+        $options[$details['prefix']] = "Toll Free ({$details['prefix']})";
+      }
+    }
+    $form['international']['tropo_exchanges_region'] = array(
+      '#type' => 'select',
+      '#title' => $region_title,
+      '#options' => $options
+    );
   }
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Save'));
   return $form;
 }
 
-function phonepoll_settings() {
+function tropo_exchanges_form_validate($form, &$form_state) {
+  $completed = FALSE;
+  $values = $form_state['clicked_button']['#post'];
+  foreach ($values as $name => $item) {
+    if (is_array($item) && array_key_exists('tropo_exchanges_prefix', $item)) {
+      if ($item['tropo_exchanges_prefix'] > 0) {
+        $completed = TRUE;
+      }
+      if ($item['tropo_exchanges_region'] > 0) {
+        $completed = TRUE;
+      }
+    }
+  }
+  if (!$completed) {
+    form_set_error('', t('You must pick at least one location to get a number in.'));
+  }
+}
+
+function tropo_exchanges_form_submit($form, &$form_state) {
+  $completed = FALSE;
+  $values = $form_state['clicked_button']['#post'];
+  //drupal_set_message(print_r($form_state,true));
+  $prefixes = array();
+  foreach ($values as $name => $item) {
+    if (is_array($item) && array_key_exists('tropo_exchanges_prefix', $item)) {
+      if ($item['tropo_exchanges_prefix'] > 0) {
+        $prefixes[] = $item['tropo_exchanges_prefix'];
+      }
+      if ($item['tropo_exchanges_region'] > 0) {
+        $prefixes[] = $item['tropo_exchanges_region'];
+      }
+    }
+  }
+  $_SESSION['tropo_exchanges'] = $prefixes;
+  if (!empty($form['#next'])) {
+    drupal_goto($form['#next']);    
+  }
+}
+
+function tropo_create() {
+  
+}
+
+function tropo_create_form(&$form_state) {
+  $form['app_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('What would you like to call your application?')
+  );
+  
+  $form['app_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Where can your application code be found?'),
+    '#description' => t('Provide an HTTP URL where we can fetch your code.')
+  );
+}
+
+function tropo_create_form_validate($form, &$form_state) {
+  $completed = FALSE;
+  $values = $form_state['clicked_button']['#post'];
+  if (empty($form_state['values']['app_name'])) {
+    form_set_error('', t('We need a name for your app.'));
+  }
+  if (empty($form_state['values']['app_url'])) {
+    form_set_error('', t('What is the URL where your code can be found?'));
+  }
+  if (strpos($form_state['values']['app_url'], 'http://') != 0 && strpos($form_state['values']['app_url'], 'https://') != 0) {
+    form_set_error('', t('That doesn\'t look like a URL. Please start with "http"'));
+  }
+}
+
+function tropo_create_form_submit($form, &$form_state) {
+  
+  createApplication($href, $name, $voiceUrl, $messagingUrl, $platform, $partition)
+  $completed = FALSE;
+  drupal_set_message('Created your application.');
+  $prefixes = array();
+  foreach ($values as $name => $item) {
+    if (is_array($item) && array_key_exists('tropo_exchanges_prefix', $item)) {
+      if ($item['tropo_exchanges_prefix'] > 0) {
+        $prefixes[] = $item['tropo_exchanges_prefix'];
+      }
+      if ($item['tropo_exchanges_region'] > 0) {
+        $prefixes[] = $item['tropo_exchanges_region'];
+      }
+    }
+  }
+  $_SESSION['tropo_exchanges'] = $prefixes;
+  if (!empty($form['#next'])) {
+    drupal_goto($form['#next']);    
+  }
+}
+
+function tropo_settings() {
 
   $form['tropo_user'] = array(
     '#type' => 'textfield',
